@@ -15,6 +15,7 @@ def add_image_tokens_to_prompt(prefix_prompt, bos_token, image_seq_len, image_to
     #   The tokenized text is also prefixed with a fixed number of <image> tokens.
     # NOTE: from the paper it looks like the `\n` should be tokenized separately, but in the HF implementation this is not done.
     #       ref to HF implementation: https://github.com/huggingface/transformers/blob/7f79a97399bb52aad8460e1da2f36577d5dccfed/src/transformers/models/paligemma/processing_paligemma.py#L55-L73
+    # <image> * image_seq_len + <bos> + prefix_prompt + \n
     return f"{image_token * image_seq_len}{bos_token}{prefix_prompt}\n"
 
 

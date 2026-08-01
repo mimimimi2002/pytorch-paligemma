@@ -6,16 +6,16 @@ class SiglipVisionConfig:
 
     def __init__(
         self,
-        hidden_size=768,
-        intermediate_size=3072,
+        hidden_size=768, # embedding dimension of the model
+        intermediate_size=3072, # size of the feedforward layer in the transformer
         num_hidden_layers=12,
         num_attention_heads=12,
         num_channels=3,
-        image_size=224,
+        image_size=224, # size of the input images for the model. The input image will be converted to this size.
         patch_size=16,
         layer_norm_eps=1e-6,
         attention_dropout=0.0,
-        num_image_tokens: int = None,
+        num_image_tokens: int = None, # number of image tokens to be used in the model. If None, it will be calculated based on the image size and patch size.
         **kwargs
     ):
         super().__init__()
@@ -42,7 +42,7 @@ class SiglipVisionEmbeddings(nn.Module):
 
         self.patch_embedding = nn.Conv2d(
             in_channels=config.num_channels,
-            out_channels=self.embed_dim,
+            out_channels=self.embed_dim, # the number of filters to specify 
             kernel_size=self.patch_size,
             stride=self.patch_size,
             padding="valid", # This indicates no padding is added
@@ -50,7 +50,7 @@ class SiglipVisionEmbeddings(nn.Module):
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches
-        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
+        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim) # learned
         self.register_buffer(
             "position_ids",
             torch.arange(self.num_positions).expand((1, -1)),
@@ -97,6 +97,7 @@ class SiglipAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
 
         # hidden_states: [Batch_Size, Num_Patches, Embed_Dim]
+        # use patch num as sequence length
         batch_size, seq_len, _ = hidden_states.size()
         # query_states: [Batch_Size, Num_Patches, Embed_Dim]
         query_states = self.q_proj(hidden_states)
@@ -140,7 +141,7 @@ class SiglipAttention(nn.Module):
 
         return attn_output, attn_weights
 
-
+# Feedforward network with two linear layers and a GELU activation in between
 class SiglipMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -222,7 +223,9 @@ class SiglipVisionTransformer(nn.Module):
         self.config = config
         embed_dim = config.hidden_size
 
+        # convolution + flatten + position embedding
         self.embeddings = SiglipVisionEmbeddings(config)
+        # multi-head attention + feedforward network + normalization
         self.encoder = SiglipEncoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
 
@@ -246,4 +249,6 @@ class SiglipVisionModel(nn.Module):
 
     def forward(self, pixel_values) -> Tuple:
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_Patches, Embed_Dim]
+        # Num_Patches is same as num_image_tokens, which is calculated as (image_size // patch_size) ** 2
+        # because it only uses liniar projection of the image patches and does not use any pooling or downsampling.
         return self.vision_model(pixel_values=pixel_values) 

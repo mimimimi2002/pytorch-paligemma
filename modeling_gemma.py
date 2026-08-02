@@ -42,16 +42,16 @@ class GemmaConfig():
     def __init__(
         self,
         vocab_size,
-        hidden_size,
-        intermediate_size,
-        num_hidden_layers,
+        hidden_size, # embedding dimension of the language model
+        intermediate_size, # feedforward's hidden size.
+        num_hidden_layers, # number of decoder layers in the language model
         num_attention_heads,
         num_key_value_heads,
         head_dim=256,
-        max_position_embeddings=8192,
+        max_position_embeddings=8192, # maximum number of tokens in the input sequence
         rms_norm_eps=1e-6,
         rope_theta=10000.0,
-        attention_bias=False,
+        attention_bias=False, # no bias in the attention layers
         attention_dropout=0.0,
         pad_token_id=None,
         **kwargs,
@@ -75,13 +75,13 @@ class PaliGemmaConfig():
 
     def __init__(
         self,
-        vision_config=None,
-        text_config=None,
+        vision_config=None, # SiglipVisionConfig
+        text_config=None, # GammaConfig
         ignore_index=-100,
-        image_token_index=256000,
+        image_token_index=256000, # token id for <image> token
         vocab_size=257152,
-        projection_dim=2048,
-        hidden_size=2048,
+        projection_dim=2048, # image features are projected to 2048 dimensions
+        hidden_size=2048, # hidden size of the language model
         pad_token_id=None,
         **kwargs,
     ):
@@ -101,6 +101,7 @@ class PaliGemmaConfig():
         self.text_config = GemmaConfig(**text_config, pad_token_id=pad_token_id)
         self.vocab_size = self.text_config.vocab_size
 
+        # 224 / 14 = 16, 16 * 16 = 256, so the number of image tokens is 256
         self.text_config.num_image_tokens = (self.vision_config.image_size // self.vision_config.patch_size) ** 2
         self.vision_config.projection_dim = projection_dim
 
@@ -439,14 +440,17 @@ class PaliGemmaForConditionalGeneration(nn.Module):
         super().__init__()
         self.config = config
         self.vision_tower = SiglipVisionModel(config.vision_config)
+        # Project the image features to the same dimension as the text features
         self.multi_modal_projector = PaliGemmaMultiModalProjector(config)
         self.vocab_size = config.vocab_size
 
+        # LLM takes the text input and the image features as input and generates the output text
         language_model = GemmaForCausalLM(config.text_config)
         self.language_model = language_model
 
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
 
+    # embedding layer is shared between the input and output of the language model
     def tie_weights(self):
         return self.language_model.tie_weights()
 
@@ -520,23 +524,27 @@ class PaliGemmaForConditionalGeneration(nn.Module):
 
     def forward(
         self,
-        input_ids: torch.LongTensor = None,
+        input_ids: torch.LongTensor = None, # <image> * image_seq_len + <bos> + prefix_prompt + \n
         pixel_values: torch.FloatTensor = None,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None, # Used when batch has different sequence lengths. The padding is used to fill the gap.
         kv_cache: Optional[KVCache] = None,
     ) -> Tuple:
 
         # Make sure the input is right-padded
+        # Assume there is no padding.
         assert torch.all(attention_mask == 1), "The input cannot be padded"
 
         # 1. Extra the input embeddings
         # shape: (Batch_Size, Seq_Len, Hidden_Size)
+        # Contains image placeholder and text embeddings. 
+        # The image placeholder is replaced by the image features later.
         inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
 
         # 2. Merge text and images
         # [Batch_Size, Channels, Height, Width] -> [Batch_Size, Num_Patches, Embed_Dim]
         selected_image_feature = self.vision_tower(pixel_values.to(inputs_embeds.dtype))
         # [Batch_Size, Num_Patches, Embed_Dim] -> [Batch_Size, Num_Patches, Hidden_Size]
+        # resize the image features to match the hidden size of the language model
         image_features = self.multi_modal_projector(selected_image_feature)
 
         # Merge the embeddings of the text tokens and the image tokens

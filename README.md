@@ -3,6 +3,24 @@ This is a replication of the pytorch-paligemma(https://github.com/hkproj/pytorch
 
 The model code is Umar Jamil's; the notes below are mine. See [License and attribution](#license-and-attribution).
 
+## Usage
+
+```bash
+pip install -r requirements.txt
+
+# The PaliGemma weights are gated: accept the Gemma Terms of Use on the model
+# page (https://huggingface.co/google/paligemma-3b-pt-224), then authenticate.
+huggingface-cli login          # or: export HF_TOKEN=hf_...
+
+./launch_inference.sh
+```
+
+`MODEL_PATH` in [launch_inference.sh](launch_inference.sh) accepts either a Hugging Face repo id
+(`google/paligemma-3b-pt-224`, downloaded to `~/.cache/huggingface` on first run and reused
+afterwards) or a path to a local directory that already contains the checkpoint. Only the
+weights, `config.json` and the tokenizer are pulled from the Hub — the model itself is built
+from the code in this repository.
+
 # Paligemma structure
 <img width="600" height="auto" alt="スクリーンショット 2026-07-27 16 13 08" src="https://github.com/user-attachments/assets/4c173634-3a15-4cc7-8f48-2867841bbd3d" />
 

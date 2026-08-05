@@ -1,12 +1,14 @@
 # pytorch-paligemma
 This is a replication of the pytorch-paligemma(https://github.com/hkproj/pytorch-paligemma)
 
+The model code is Umar Jamil's; the notes below are mine. See [License and attribution](#license-and-attribution).
+
 # Paligemma structure
 <img width="600" height="auto" alt="スクリーンショット 2026-07-27 16 13 08" src="https://github.com/user-attachments/assets/4c173634-3a15-4cc7-8f48-2867841bbd3d" />
 
 PaliGemma is a vision language model which consists of a vision encoder (SigLIP), a projector, and an LLM (Gemma).
 
-The key idea is : **the image is turned into 256 vectors that live in the same space as word embeddings. ** From Gemma's point of view there is no "image", just a sequence of embeddings, some of which happen to have come from a picture.
+The key idea is : the image is turned into 256 vectors that live in the same space as word embeddings. From Gemma's point of view there is no "image", just a sequence of embeddings, some of which happen to have come from a picture.
 
 
 ## SigLIP
@@ -92,3 +94,21 @@ config = PaliGemmaConfig(**model_config_file)   # utils.py
 ```
 
 The actual values are `image_token_index=257152`, `vocab_size=257216`, `patch_size=14`. Read `config.json`, not the defaults.
+
+## License and attribution
+
+This repository is a **derivative work**, and the parts have different owners.
+
+| | Origin | Terms |
+|---|---|---|
+| `inference.py`, `modeling_gemma.py`, `modeling_siglip.py`, `processing_paligemma.py`, `utils.py`, `launch_inference.sh`, `notes/` | [hkproj/pytorch-paligemma](https://github.com/hkproj/pytorch-paligemma) by Umar Jamil | **No license published upstream** — all rights reserved by the original authors. Reproduced here for study only. |
+| This README and the explanatory code comments | Mine | MIT — see [LICENSE](LICENSE) |
+| PaliGemma weights | Google | [Gemma Terms of Use](https://ai.google.dev/gemma/terms). Not included here; download separately. |
+
+Because the upstream repository carries no license, the base implementation is
+technically "all rights reserved" and this repository cannot grant you any
+rights to it. If you want to build on the model code itself, ask upstream to
+add a license first.
+
+The [LICENSE](LICENSE) file states this scope explicitly and covers only my own
+contributions.

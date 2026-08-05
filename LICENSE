@@ -1,0 +1,49 @@
+This repository is a derivative work. Please read the scope note below
+before the license text.
+
+================================================================================
+SCOPE
+================================================================================
+
+The MIT License below applies ONLY to the contributions of the copyright
+holder named in it -- that is, the documentation (README.md), the explanatory
+code comments, and any files added after upstream commit 34e1d98.
+
+It does NOT apply to:
+
+  * The original model implementation -- inference.py, modeling_gemma.py,
+    modeling_siglip.py, processing_paligemma.py, utils.py,
+    launch_inference.sh -- and the slides under notes/, which originate from
+    https://github.com/hkproj/pytorch-paligemma by Umar Jamil.
+
+    That repository publishes no license, so all rights to those materials
+    remain reserved by their authors. They are reproduced here for study
+    purposes only, and this repository grants no rights to them.
+
+  * The PaliGemma model weights, which are not part of this repository. They
+    are distributed by Google under the Gemma Terms of Use
+    (https://ai.google.dev/gemma/terms) and must be obtained separately.
+
+================================================================================
+
+MIT License
+
+Copyright (c) 2026 mimimimi2002
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

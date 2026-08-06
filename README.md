@@ -68,17 +68,6 @@ this checkpoint. So the asymmetry is real and worth stating plainly: `<loc>` is 
 and needs nothing to interpret it, while `<seg>` is an **index into a codebook this
 repository does not have**. Same vocabulary, same softmax, one of them decodable here.
 
-Comparing the two boxes is a free sanity check, since they were generated independently by
-two different prompts:
-
-| | y_min | x_min | y_max | x_max |
-|---|---|---|---|---|
-| `detect cat` | 222 | 113 | 933 | 824 |
-| `segment cat` | 205 | 127 | 889 | 824 |
-
-They agree to within a few percent of each axis, and on `x_max` exactly — consistent
-localisation, arrived at twice, with no shared computation between the two runs.
-
 ## Usage
 
 ```bash

@@ -19,7 +19,7 @@ the Hub, and the network itself is the code in this repository.
     <br/>[1 patches](#step1-divide-image-into-small-patches) · [2 embedding](#step2-embedding) · [3 position](#step3-positional-embedding) · [4 transformer block](#step4-transformer-block) · [5 output norm](#step5-output-norm)
   - [Projection](#projection)
   - [Gemma model](#gemma-model) · [Gemma architecture](#gemma-architecture)
-    <br/>[1 input sequence](#step1-build-the-input-sequence) · [2 merge the image](#step2-embed-and-merge-the-image) · [3 scaling](#step3-scale-the-whole-sequence) · [4 decoder block](#step4-decoder-block) · [5 tied head](#step5-final-norm-and-the-tied-head)
+    <br/>[1 input sequence](#step1-build-the-input-sequence) · [2 merge the image](#step2-embed-and-merge-the-image) · [3 scaling](#step3-scale-the-whole-sequence) · [4 decoder block](#step4-decoder-block) ([prefix-LM](#prefix-lm) · [prefill and decode](#prefill-and-decode) · [KV cache](#kv-cache)) · [5 tied head](#step5-final-norm-and-the-tied-head)
   - [SigLIP and Gemma side by side](#siglip-and-gemma-side-by-side)
   - [Vocabulary](#vocabulary) · [Where the parameters sit](#where-the-parameters-sit) · [Where the numbers come from](#where-the-numbers-come-from)
 - [License and attribution](#license-and-attribution)
@@ -269,6 +269,35 @@ Google's own wording matches the code's naming:
 > The image tokens and prefix tokens are concatenated (in this order) and passed to the Gemma decoder with **full block-attention**, which then generates an output text (the "suffix") auto-regressively with **masked attention**.
 
 PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the prompt form a prefix that attends **bidirectionally** — every image patch can see every other patch and the prompt, and vice versa. Only the generated suffix is causally masked. In this repo the prefill mask is filled with zeros (no masking at all), which implements exactly that, and assumes no padding.
+
+#### Prefill and decode
+
+Generation runs the same `forward` in two different regimes. `_merge_input_ids_with_image_features` branches on whether the cache is empty, and every shape downstream follows from that:
+
+| | prefill | decode |
+|---|---|---|
+| `input_ids` | 256 image slots + `<bos>` + prompt + newline | the single token just generated |
+| `q_len` | the whole sequence | 1, asserted |
+| mask | `[B, 1, q_len, q_len]` | `[B, 1, 1, kv_len]` |
+| `position_ids` | `1 … q_len`, from `cumsum` over the attention mask | only the newest position |
+| attention weights | a full `q_len × q_len` matrix per head | **one row**, `1 × kv_len` |
+| KV cache | written — every position, every layer | one position appended per layer |
+
+Prefill is the expensive pass: every token attends to every token, so the attention matrix is quadratic and the cache is filled in one shot. Decode never rebuilds it. The query is a single token, the keys and values come back from the cache, and each step computes exactly one row of attention against everything seen so far. That is the whole payoff — without the cache, step *t* would recompute all *t* keys and values from scratch.
+
+This is why [inference.py](inference.py) appends only `next_token` to `input_ids` after the first iteration, instead of resubmitting the growing sequence.
+
+#### KV cache
+
+`KVCache` is deliberately plain: **every layer keeps its own** key tensor and value tensor, held in a list indexed by `layer_idx`, and `update()` does nothing but `torch.cat` along the sequence dimension and return everything accumulated so far. Prefill fills the cache in a single pass. Each decode step then projects a key and a value for the one incoming token, appends them, and computes attention against the whole accumulated set. Every layer has its own KV cache. KV cache will be built in Prefill phase, in decoder phase, it create a new KV and append to existing KV cache then calculate attention score.
+
+#### One KV head shared by eight query heads
+
+In ordinary multi-head attention, each of the 8 heads gets its own Q, **its own K and its own V**.
+
+The problem is the cache. Every decode step reads the whole KV cache back — 100 times over a 100-token answer — and eight separate key/value heads would be 8× more to read each time. **Reading is the slow part**, not the arithmetic.
+
+So Gemma computes only **one** key head and one value head, and all 8 query heads attend over that same shared pair. `repeat_kv` copies it out to eight just before the matmul, so the attention itself stays ordinary 8-head attention — the saving is entirely in what the cache had to hold.
 
 ### Step5 final norm and the tied head
 One last `RMSNorm`, then `lm_head` projects 2048 back to the full 257216-entry vocabulary. `tie_weights()` points `lm_head.weight` at `embed_tokens.weight`, so the same matrix reads the input and scores the output.

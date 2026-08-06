@@ -35,7 +35,8 @@ reproducible — the script prints `prompt + decoded`, which is what the table s
 
 ### Detection
 
-![detection result](test_images/pic1_detected.jpg)
+<img width="500" height="auto" alt="pic1_detected" src="https://github.com/user-attachments/assets/061c07a8-563c-498f-b2b9-db9d6dff4eb2" />
+
 
 `<loc0222><loc0113><loc0933><loc0824>` is `y_min, x_min, y_max, x_max` quantised to 1024
 bins. Turning that into pixels is a plain linear rescale, and the reason is worth stating:

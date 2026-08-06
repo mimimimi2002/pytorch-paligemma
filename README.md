@@ -38,8 +38,6 @@ whole documented interface of a `pt` checkpoint.
 | `detect cat` | `detect cat <loc0222><loc0113><loc0933><loc0824> cat` |
 | `segment cat` | `segment cat <loc0205><loc0127><loc0889><loc0824> <seg087><seg041>…<seg055> cat` |
 
-Three prompts, three shapes of answer, all decoded by the same `lm_head` over one 257216-row
-vocabulary. Only the first is what people usually mean by "language model output".
 
 ### Detection
 
@@ -80,28 +78,6 @@ two different prompts:
 
 They agree to within a few percent of each axis, and on `x_max` exactly — consistent
 localisation, arrived at twice, with no shared computation between the two runs.
-
-### Where a "prefix" actually lives
-
-Two different mechanisms get called "how PaliGemma knows the task", and only one of them
-exists in code:
-
-| | what it is | where you can see it |
-|---|---|---|
-| `<image>`, `<loc0000>`-`<loc1023>`, `<seg000>`-`<seg127>` | **vocabulary** — real ids reserved in the tokenizer and real rows in the embedding matrix | [processing_paligemma.py:88-96](processing_paligemma.py#L88-L96); `tokenize("<loc0222>")` returns one token |
-| `caption` / `detect` / `segment` | **a data convention** — ordinary English words that the pretraining corpus happened to put in front of each example | nowhere. `tokenize("detect cat")` returns ordinary subwords, and nothing in this repo, in `transformers`, or in the tokenizer treats them specially |
-
-Nothing enforces the second row. `detect` works because the weights learned the correlation,
-which is also why fine-tuning a `pt` checkpoint means picking your own prefix — Google's
-three strings are a choice, not a standard.
-
-One consequence of the first row is worth spelling out: `add_tokens()` never touches the
-model. `resize_token_embeddings` is called nowhere in this repository, and the embedding
-matrix is sized purely from `config.json`
-([modeling_gemma.py:368](modeling_gemma.py#L368), `nn.Embedding(257216, 2048)`). The
-tokenizer additions only line the *strings* up with ids the checkpoint already trained, so
-the order in which `<loc>` and `<seg>` are added is load-bearing — swap the two loops and
-every coordinate silently decodes to the wrong number, with no error anywhere.
 
 ## Usage
 

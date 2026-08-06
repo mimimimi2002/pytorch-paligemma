@@ -1,4 +1,4 @@
-<img width="239" height="205" alt="スクリーンショット 2026-08-06 22 13 30" src="https://github.com/user-attachments/assets/29d2936f-0343-4c94-b14a-0559bab8792f" /># PaliGemma from scratch — read, annotated, and probed
+# PaliGemma from scratch — read, annotated, and probed
 
 PaliGemma (SigLIP vision encoder + linear projector + Gemma 2B) built from plain PyTorch,
 with the real `google/paligemma-3b-pt-224` weights loaded into it. No `transformers`

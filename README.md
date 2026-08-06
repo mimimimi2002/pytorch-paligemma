@@ -9,6 +9,21 @@ the Hub, and the network itself is the code in this repository.
 > by Umar Jamil. **The model implementation is his.** What is mine is listed below and
 > spelled out in [License and attribution](#license-and-attribution).
 
+## Contents
+
+- [What I added](#what-i-added)
+- [What it actually outputs](#what-it-actually-outputs) — [Detection](#detection) · [Segmentation stops one step short](#segmentation-stops-one-step-short)
+- [Usage](#usage)
+- [How PaliGemma works](#how-paligemma-works)
+  - [SigLIP](#siglip) · [SigLIP architecture](#siglip-architecture)
+    <br/>[1 patches](#step1-divide-image-into-small-patches) · [2 embedding](#step2-embedding) · [3 position](#step3-positional-embedding) · [4 transformer block](#step4-transformer-block) · [5 output norm](#step5-output-norm)
+  - [Projection](#projection)
+  - [Gemma model](#gemma-model) · [Gemma architecture](#gemma-architecture)
+    <br/>[1 input sequence](#step1-build-the-input-sequence) · [2 merge the image](#step2-embed-and-merge-the-image) · [3 scaling](#step3-scale-the-whole-sequence) · [4 decoder block](#step4-decoder-block) · [5 tied head](#step5-final-norm-and-the-tied-head)
+  - [SigLIP and Gemma side by side](#siglip-and-gemma-side-by-side)
+  - [Vocabulary](#vocabulary) · [Where the parameters sit](#where-the-parameters-sit)
+- [License and attribution](#license-and-attribution)
+
 ## What I added
 
 | | |

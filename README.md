@@ -92,6 +92,8 @@ from the code in this repository.
 # How PaliGemma works
 <img width="600" height="auto" alt="PaliGemma architecture" src="https://github.com/user-attachments/assets/4c173634-3a15-4cc7-8f48-2867841bbd3d" />
 
+<sub>Figure from *PaliGemma: A versatile 3B VLM for transfer*, Beyer et al., 2024 ([arXiv:2407.07726](https://arxiv.org/abs/2407.07726)).</sub>
+
 PaliGemma is a vision language model which consists of a vision encoder (SigLIP), a projector, and an LLM (Gemma).
 
 The key idea is : the image is turned into 256 vectors that live in the same space as word embeddings. From Gemma's point of view there is no "image", just a sequence of embeddings, some of which happen to have come from a picture.
@@ -242,6 +244,14 @@ Order matters in the attention body: RoPE is applied **before** the KV cache is 
 <img width="239" height="205" alt="スクリーンショット 2026-08-06 22 13 30" src="https://github.com/user-attachments/assets/cb8dde9a-61f6-4196-8652-55016d39f480" />
 
 PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the prompt form a prefix that attends **bidirectionally** — every image patch can see every other patch and the prompt, and vice versa. Only the generated suffix is causally masked. In this repo the prefill mask is filled with zeros (no masking at all), which implements exactly that, and assumes no padding.
+
+<img width="239" height="205" alt="PaliGemma attention mask: bidirectional over the image and prefix, causal over the suffix" src="https://github.com/user-attachments/assets/29d2936f-0343-4c94-b14a-0559bab8792f" />
+
+<sub>Figure from *PaliGemma: A versatile 3B VLM for transfer*, Beyer et al., 2024 ([arXiv:2407.07726](https://arxiv.org/abs/2407.07726)). The solid block covering the image and prefix is the bidirectional part; only the lower-right triangle over the suffix is causal.</sub>
+
+Google's own wording matches the code's naming:
+
+> The image tokens and prefix tokens are concatenated (in this order) and passed to the Gemma decoder with **full block-attention**, which then generates an output text (the "suffix") auto-regressively with **masked attention**.
 
 ### Step5 final norm and the tied head
 One last `RMSNorm`, then `lm_head` projects 2048 back to the full 257216-entry vocabulary. `tie_weights()` points `lm_head.weight` at `embed_tokens.weight`, so the same matrix reads the input and scores the output.

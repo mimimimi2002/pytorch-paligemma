@@ -18,6 +18,7 @@ def get_model_inputs(
     image = Image.open(image_file_path)
     images = [image]
     prompts = [prompt]
+    # <image> * image_seq_len + <bos> + prefix_prompt + \n
     model_inputs = processor(text=prompts, images=images)
     model_inputs = move_inputs_to_device(model_inputs, device)
     return model_inputs
@@ -58,7 +59,8 @@ def test_inference(
         next_token_logits = outputs["logits"][:, -1, :]
         # Sample the next token
         if do_sample:
-            # Apply temperature
+            # Apply temperature before softmax to adjust the distribution of the logits.
+            # A higher temperature will make the distribution more uniform, while a lower temperature will make it more peaked.
             next_token_logits = torch.softmax(next_token_logits / temperature, dim=-1)
             next_token = _sample_top_p(next_token_logits, top_p)
         else:
@@ -70,6 +72,8 @@ def test_inference(
         if next_token.item() == stop_token:
             break
         # Append the next token to the input
+        # input id is just the last token, because we are using the kv_cache to store the previous tokens.
+        # Input ids was originally image tokens + bos token + prefix prompt + generated tokens. We only need to pass the last generated token to the model, because the model will use the kv_cache to retrieve the previous tokens.
         input_ids = next_token.unsqueeze(-1)
         attention_mask = torch.cat(
             [attention_mask, torch.ones((1, 1), device=input_ids.device)], dim=-1
@@ -81,7 +85,7 @@ def test_inference(
 
     print(prompt + decoded)
 
-
+# Get all the tokens that sum up to the top p probability and sample from them.
 def _sample_top_p(probs: torch.Tensor, p: float):
     # (B, vocab_size)
     probs_sort, probs_idx = torch.sort(probs, dim=-1, descending=True)
@@ -127,6 +131,7 @@ def main(
 
     num_image_tokens = model.config.vision_config.num_image_tokens
     image_size = model.config.vision_config.image_size
+    # convert the image to the format expected by the model
     processor = PaliGemmaProcessor(tokenizer, num_image_tokens, image_size)
 
     print("Running inference")

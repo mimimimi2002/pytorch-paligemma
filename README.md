@@ -54,7 +54,7 @@ whole documented interface of a `pt` checkpoint.
 | `segment cat` | `segment cat <loc0205><loc0127><loc0889><loc0824> <seg087><seg041>…<seg055> cat` |
 
 
-### Detection
+### Detection (This is my cat 🐈)
 
 <img width="500" height="auto" alt="pic1_detected" src="https://github.com/user-attachments/assets/061c07a8-563c-498f-b2b9-db9d6dff4eb2" />
 

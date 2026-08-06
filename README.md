@@ -15,7 +15,7 @@ the Hub, and the network itself is the code in this repository.
 |---|---|
 | **`<loc>` detection decoder** — [detection.py](detection.py) | `detect cat` answers with `<loc0222><loc0113>…`; this parses those tokens back into pixel coordinates and draws the boxes. Not in upstream. |
 | **Hugging Face weight loading** — [`resolve_model_path()`](utils.py#L11) | Upstream required a manually downloaded checkpoint directory. Now `MODEL_PATH` also accepts a repo id and pulls only the files this implementation reads. |
-| **Architecture write-up** — [below](#how-paligemma-works) | Not a summary of the paper: the parts that are only visible in the code, e.g. why the image features are divided by `sqrt(hidden_size)`, and which config defaults silently disagree with the checkpoint. |
+| **Architecture write-up** — [below](#how-paligemma-works) | Follows one image and one prompt end to end — pixels into 256 SigLIP patch embeddings, through the projector, merged into the text sequence, then through Gemma's attention to a token — and says what each stage actually does to them. |
 | **Line-by-line annotations** | Comments through `modeling_gemma.py`, `modeling_siglip.py`, `processing_paligemma.py`, `inference.py`. |
 | **Inference runs** — [below](#what-it-actually-outputs) | Four prompts against the real weights, including one result that contradicts what I expected. |
 

@@ -241,10 +241,6 @@ It is a one-line detail with no comment upstream, and getting it backwards would
 Order matters in the attention body: RoPE is applied **before** the KV cache is updated, so the cache holds already-rotated keys and each key keeps the position it had when it was written. `repeat_kv` comes after, so the cache stores one head rather than eight.
 
 #### Prefix-LM
-<img width="239" height="205" alt="スクリーンショット 2026-08-06 22 13 30" src="https://github.com/user-attachments/assets/cb8dde9a-61f6-4196-8652-55016d39f480" />
-
-PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the prompt form a prefix that attends **bidirectionally** — every image patch can see every other patch and the prompt, and vice versa. Only the generated suffix is causally masked. In this repo the prefill mask is filled with zeros (no masking at all), which implements exactly that, and assumes no padding.
-
 <img width="239" height="205" alt="PaliGemma attention mask: bidirectional over the image and prefix, causal over the suffix" src="https://github.com/user-attachments/assets/29d2936f-0343-4c94-b14a-0559bab8792f" />
 
 <sub>Figure from *PaliGemma: A versatile 3B VLM for transfer*, Beyer et al., 2024 ([arXiv:2407.07726](https://arxiv.org/abs/2407.07726)). The solid block covering the image and prefix is the bidirectional part; only the lower-right triangle over the suffix is causal.</sub>
@@ -252,6 +248,8 @@ PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the pr
 Google's own wording matches the code's naming:
 
 > The image tokens and prefix tokens are concatenated (in this order) and passed to the Gemma decoder with **full block-attention**, which then generates an output text (the "suffix") auto-regressively with **masked attention**.
+
+PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the prompt form a prefix that attends **bidirectionally** — every image patch can see every other patch and the prompt, and vice versa. Only the generated suffix is causally masked. In this repo the prefill mask is filled with zeros (no masking at all), which implements exactly that, and assumes no padding.
 
 ### Step5 final norm and the tied head
 One last `RMSNorm`, then `lm_head` projects 2048 back to the full 257216-entry vocabulary. `tie_weights()` points `lm_head.weight` at `embed_tokens.weight`, so the same matrix reads the input and scores the output.

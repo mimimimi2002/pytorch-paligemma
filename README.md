@@ -14,7 +14,7 @@ the Hub, and the network itself is the code in this repository.
 | | |
 |---|---|
 | **`<loc>` detection decoder** — [detection.py](detection.py) | `detect cat` answers with `<loc0222><loc0113>…`; this parses those tokens back into pixel coordinates and draws the boxes. Not in upstream. |
-| **Hugging Face weight loading** — [`resolve_model_path()`](utils.py#L11) | Upstream required a manually downloaded checkpoint directory. Now `MODEL_PATH` also accepts a repo id and pulls only the files this implementation reads. |
+| **Hugging Face weight loading** — [`resolve_model_path()`](utils.py) | Upstream required a manually downloaded checkpoint directory. Now `MODEL_PATH` also accepts a repo id and pulls only the files this implementation reads. |
 | **Architecture write-up** — [below](#how-paligemma-works) | Follows one image and one prompt end to end — pixels into 256 SigLIP patch embeddings, through the projector, merged into the text sequence, then through Gemma's attention to a token — and says what each stage actually does to them. |
 | **Line-by-line annotations** | Comments through `modeling_gemma.py`, `modeling_siglip.py`, `processing_paligemma.py`, `inference.py`. |
 | **Inference runs** — [below](#what-it-actually-outputs) | All three of the task prefixes Google documents, run against the real weights, with the boxes drawn and the one limit this checkpoint cannot pass. |
@@ -46,7 +46,7 @@ whole documented interface of a `pt` checkpoint.
 
 `<loc0222><loc0113><loc0933><loc0824>` is `y_min, x_min, y_max, x_max` quantised to 1024
 bins. Turning that into pixels is a plain linear rescale, and the reason is worth stating:
-[`process_images`](processing_paligemma.py#L54) squashes every input to a square with
+[`process_images`](processing_paligemma.py) squashes every input to a square with
 `resize()`, which does **not** preserve the aspect ratio and adds no letterbox padding. So
 bin 0 is always the top (or left) edge of the *original* image and bin 1023 the bottom (or
 right) edge — no un-padding step is needed. [detection.py](detection.py) does the
@@ -102,23 +102,68 @@ SigLIP is a vision encoder which takes an image and converts it into image token
 
 SigLIP improves on CLIP by replacing the **softmax-based contrastive loss with a pairwise sigmoid loss**. CLIP normalizes similarity scores across the entire batch, which requires gathering results from every device; SigLIP scores each image-text pair independently, so no global normalization is needed and training scales to much larger batches.
 
-In this model we take a 224x224 image and divide it into **14x14 pixel patches**, giving a **16x16 = 256 patch** grid:
+## SigLIP architecture
+
+Every class in this diagram lives in [modeling_siglip.py](modeling_siglip.py).
+
+```mermaid
+flowchart TB
+  A["pixel_values — [B, 3, 224, 224]"]
+  B["patch_embedding<br/>Conv2d(3 → 1152, kernel=14, stride=14, padding=valid)"]
+  C["[B, 1152, 16, 16]<br/>a 16×16 grid of non-overlapping patches"]
+  D["flatten(2) then transpose(1, 2)<br/>[B, 256, 1152]"]
+  E["+ position_embedding<br/>learned Embedding(256, 1152)"]
+  A --> B --> C --> D --> E --> G
+
+  subgraph ENC ["SiglipEncoderLayer × 27"]
+    direction TB
+    G["LayerNorm"] --> H["SiglipAttention — 16 heads × 72 dims<br/>no mask: every patch sees every patch"]
+    H --> I["+ residual"]
+    I --> J["LayerNorm"]
+    J --> K["SiglipMLP — 1152 → 4304 → 1152, GELU(tanh)"]
+    K --> M["+ residual"]
+  end
+
+  M --> N["post_layernorm"]
+  N --> O["[B, 256, 1152]<br/>→ multi_modal_projector"]
+```
+
+### Step1 Divide image into small patches
+A 224x224 image is cut into **14x14 pixel patches**, giving a **16x16 = 256 patch** grid — `(224 // 14) ** 2 = 256`, computed in `SiglipVisionEmbeddings`.
+
+Patch extraction is a strided convolution, `Conv2d(kernel_size=14, stride=14, padding="valid")`. Because stride equals kernel size, the patches tile the image exactly and never overlap.
+
+### Step2 embedding
+The same convolution also does the embedding: `out_channels=1152` means each patch — 14 x 14 x 3 = 588 numbers — comes out as one 1152-dimensional vector. That is a plain linear projection of the flattened patch; the convolution is just an efficient way to apply the same projection to all 256 patches at once.
+
+The result is then reshaped in two steps:
 
 ```
-num_patches = (image_size // patch_size) ** 2 = (224 // 14) ** 2 = 256
+[B, 1152, 16, 16]  --flatten(2)-->  [B, 1152, 256]  --transpose(1,2)-->  [B, 256, 1152]
 ```
 
-Patch extraction is just a strided convolution — `Conv2d(kernel_size=14, stride=14)` in `modeling_siglip.py` — so the patches never overlap. The output is `[Batch, 256, 1152]`.
+From here on the 2D layout is gone. The tensor is a **sequence of 256 vectors**, and nothing downstream knows which patch sat next to which.
 
-Note that `image_size` is baked into the weights, not just a preprocessing option: the position embedding is a learned `nn.Embedding(256, 1152)` table. Feeding a 448x448 image would produce 1024 patches and overflow that table, which is why Google ships separate 224 / 448 / 896 checkpoints instead of one resolution-agnostic model.
+### Step3 positional embedding
+That lost geometry is restored by adding a **learned** table, `nn.Embedding(256, 1152)` — not the sinusoidal encodings of the original Transformer. Row *i* is simply added to patch *i*, and since patch *i* is always the same location in the grid, the model learns what it needs about spatial arrangement.
 
-| variant | grid | image tokens |
-|---|---|---|
-| 224 | 16x16 | 256 |
-| 448 | 32x32 | 1024 |
-| 896 | 64x64 | 4096 |
+This table is also why resolution is baked into the weights rather than being a preprocessing choice. A 448x448 image would produce 1024 patches and index past the end of a 256-row table, which is why Google ships separate 224 / 448 / 896 checkpoints instead of one resolution-agnostic model.
 
-This encoder is already pretrained on images and their corresponding captions using contrastive learning, and stays frozen in spirit — PaliGemma simply reuses it.
+### Step4 transformer block
+`SiglipEncoderLayer`, repeated 27 times. It is **pre-norm**: the LayerNorm sits inside each residual branch, so the residual stream itself is never normalised.
+
+```
+h = h + Attention(LayerNorm(h))
+h = h + MLP(LayerNorm(h))
+```
+
+Two details are visible only in the code:
+
+- `SiglipAttention.forward` takes **no `attention_mask` argument**. There is nothing to mask — all 256 patches attend to all 256 patches, in every layer. Compare this with Gemma, where masking is the entire story.
+- `SiglipMLP` is an ordinary two-layer feed-forward, 1152 → 4304 → 1152 with `gelu(approximate="tanh")` — not the gated GeGLU that Gemma uses.
+
+### Step5 output norm
+One final `post_layernorm` after all 27 layers, and the output is `[B, 256, 1152]`.
 
 ## Projection
 SigLIP outputs 1152-dimensional vectors, but Gemma's hidden size is 2048. The projector is a single `nn.Linear(1152, 2048)` that resizes the **embedding dimension** so the image features can sit in the same space as text embeddings. The number of tokens (256) is unchanged.
@@ -174,20 +219,12 @@ The embedding table is **tied** between input and output (`embed_tokens` and `lm
 ### Feed-forward
 Each layer's MLP uses **GeGLU**: two parallel projections `2048 -> 16384`, one passed through GELU and multiplied elementwise with the other, then projected back `16384 -> 2048`. With `num_key_value_heads: 1` (aggressive GQA) shrinking the attention blocks, the MLPs hold most of Gemma's parameters — roughly 100M per layer x 18 layers.
 
-## Config gotcha
-The default arguments in `PaliGemmaConfig.__init__` (`image_token_index=256000`, `vocab_size=257152`) and in `SiglipVisionConfig` (`patch_size=16`) **do not match the real checkpoint**. They are inherited from HuggingFace's class signatures and are always overwritten by `config.json`:
-
-```python
-config = PaliGemmaConfig(**model_config_file)   # utils.py
-```
-
-The actual values are `image_token_index=257152`, `vocab_size=257216`, `patch_size=14`. Read `config.json`, not the defaults.
 
 ## Open questions I have not settled
 
 Claims above that are read off the code but not yet demonstrated by an experiment:
 
-- **The prefix-LM claim.** The *design* is confirmed by Google's own wording — image and prefix tokens go through the decoder with "full block-attention", the suffix with "masked attention" — and [the prefill mask](modeling_gemma.py#L539) being all zeros implements it. What is untested is whether it *matters*: replacing it with a triangular mask should visibly degrade captions if bidirectional prefix attention carries the weight the paper implies.
+- **The prefix-LM claim.** The *design* is confirmed by Google's own wording — image and prefix tokens go through the decoder with "full block-attention", the suffix with "masked attention" — and [the prefill mask](modeling_gemma.py) being all zeros implements it. What is untested is whether it *matters*: replacing it with a triangular mask should visibly degrade captions if bidirectional prefix attention carries the weight the paper implies.
 - **KV-cache equivalence.** Because the prefill branch masks nothing, running *without* a cache would let already-generated tokens attend to each other bidirectionally, so on-cache and off-cache generation should **not** agree. A correct prefix-LM mask (bidirectional prefix, causal suffix) looks like a prerequisite for that equivalence, not an optimisation.
 - **Parameter accounting.** The 527M embedding and "MLPs hold most of the parameters" figures are computed by hand from the config, not measured from the loaded `state_dict`.
 

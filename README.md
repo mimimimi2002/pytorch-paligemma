@@ -171,7 +171,37 @@ SigLIP outputs 1152-dimensional vectors, but Gemma's hidden size is 2048. The pr
 ## Gemma model
 Gemma is the language model that consumes the merged sequence and generates text.
 
-### Input layout
+## Gemma architecture
+
+Every class in this diagram lives in [modeling_gemma.py](modeling_gemma.py).
+
+```mermaid
+flowchart TB
+  T["input_ids<br/>256 image placeholders, bos, prompt tokens, newline"]
+  EMB["embed_tokens<br/>Embedding(257216, 2048)"]
+  IMG["image features from the projector<br/>[B, 256, 2048]"]
+  DIV["divide by sqrt(2048)"]
+  MSC["masked_scatter where input_ids == 257152<br/>[B, seq_len, 2048]"]
+  MUL["multiply the whole sequence by sqrt(2048)"]
+  T --> EMB --> MSC
+  IMG --> DIV --> MSC
+  MSC --> MUL --> A
+
+  subgraph DEC ["GemmaDecoderLayer × 18"]
+    direction TB
+    A["RMSNorm"] --> B["GemmaAttention<br/>8 query heads, 1 key/value head, head_dim 256<br/>RoPE on Q and K, then the KV cache, then repeat_kv"]
+    B --> C["+ residual"]
+    C --> D["RMSNorm"]
+    D --> E["GemmaMLP — GeGLU, 2048 → 16384 → 2048"]
+    E --> F["+ residual"]
+  end
+
+  F --> N["RMSNorm"]
+  N --> LH["lm_head — Linear(2048, 257216)<br/>weights tied to embed_tokens"]
+  LH --> O["logits — [B, seq_len, 257216]"]
+```
+
+### Step1 build the input sequence
 The processor builds one flat string and tokenizes it:
 
 ```python
@@ -184,19 +214,47 @@ input_ids = [<image> x 256, <bos>, prompt tokens..., \n]
 
 The `<image>` entries are pure **placeholders**. They reserve 256 slots in the sequence; their embeddings carry no visual information and are thrown away during the merge.
 
-### Merging text and image
-`PaliGemmaForConditionalGeneration.forward` does this in three steps:
+### Step2 embed and merge the image
+`PaliGemmaForConditionalGeneration.forward` does this in three moves:
 
 1. `get_input_embeddings()(input_ids)` — embed the whole sequence, including the meaningless `<image>` rows. This allocates a correctly shaped buffer.
 2. `vision_tower` + `multi_modal_projector` — produce `[B, 256, 2048]` from the pixels.
 3. `_merge_input_ids_with_image_features` — use `input_ids == image_token_index` as a mask and `masked_scatter` the image features into those 256 positions.
 
-Text and image only become a single tensor at step 3, and they only actually *interact* one step later, inside the transformer's self-attention.
+Text and image only become a single tensor at move 3, and they only actually *interact* one step later, inside the transformer's self-attention.
 
-One subtlety: the image features are divided by `sqrt(hidden_size)` before being scattered in. Gemma multiplies all input embeddings by `sqrt(hidden_size)` at the top of its forward pass, so this division cancels it out and keeps the image features at their original scale.
+### Step3 scale the whole sequence
+`GemmaModel.forward` opens by multiplying every embedding by `sqrt(hidden_size)`. This is why the image features were **divided** by the same constant just before being scattered in: the two cancel, so only the text embeddings are actually boosted and the image features arrive at their original scale.
 
-### Attention
+It is a one-line detail with no comment upstream, and getting it backwards would leave the visual half of the sequence 45× too large.
+
+### Step4 decoder block
+`GemmaDecoderLayer`, repeated 18 times, pre-norm like SigLIP but different in every component:
+
+- **`GemmaRMSNorm` instead of `LayerNorm`** — it rescales by the root mean square and never subtracts the mean. The learned gain is stored as `weight` initialised to zeros and applied as `(1.0 + weight)`, so an untrained norm is the identity.
+- **RoPE instead of a position table.** SigLIP adds a learned position vector once, before the first layer. Gemma instead *rotates* Q and K inside **every** attention call, so position enters as a relative phase between query and key rather than as a value added to the residual stream.
+- **GQA, taken to the limit.** 8 query heads share a **single** key/value head. `repeat_kv` broadcasts that one head back out to 8 just before the matmul, so the arithmetic is ordinary multi-head attention — the saving is entirely in what the KV cache has to store.
+- **The mask is the whole story.** Where `SiglipAttention` has no mask argument at all, `GemmaAttention` asserts one is present.
+
+Order matters in the attention body: RoPE is applied **before** the KV cache is updated, so the cache holds already-rotated keys and each key keeps the position it had when it was written. `repeat_kv` comes after, so the cache stores one head rather than eight.
+
 PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the prompt form a prefix that attends **bidirectionally** — every image patch can see every other patch and the prompt, and vice versa. Only the generated suffix is causally masked. In this repo the prefill mask is filled with zeros (no masking at all), which implements exactly that, and assumes no padding.
+
+### Step5 final norm and the tied head
+One last `RMSNorm`, then `lm_head` projects 2048 back to the full 257216-entry vocabulary. `tie_weights()` points `lm_head.weight` at `embed_tokens.weight`, so the same matrix reads the input and scores the output.
+
+### SigLIP and Gemma side by side
+
+The two towers share a shape and almost nothing else:
+
+| | SigLIP | Gemma |
+|---|---|---|
+| depth × width | 27 × 1152 | 18 × 2048 |
+| normalisation | `LayerNorm` | `RMSNorm`, no mean subtraction |
+| position | learned table, added once | RoPE, applied every layer to Q and K |
+| feed-forward | plain 2-layer, GELU | GeGLU, gated |
+| attention mask | none — the argument does not exist | required; prefix bidirectional, suffix causal |
+| KV heads | same as query heads | one, shared by all 8 |
 
 ### Vocabulary
 PaliGemma extends the Gemma tokenizer so that detection and segmentation can be expressed as plain text generation:
@@ -216,17 +274,8 @@ Because these tokens are registered with `tokenizer.add_tokens()` rather than as
 
 The embedding table is **tied** between input and output (`embed_tokens` and `lm_head` share weights), so those 257216 x 2048 ≈ 527M parameters are only stored once.
 
-### Feed-forward
-Each layer's MLP uses **GeGLU**: two parallel projections `2048 -> 16384`, one passed through GELU and multiplied elementwise with the other, then projected back `16384 -> 2048`. With `num_key_value_heads: 1` (aggressive GQA) shrinking the attention blocks, the MLPs hold most of Gemma's parameters — roughly 100M per layer x 18 layers.
-
-
-## Open questions I have not settled
-
-Claims above that are read off the code but not yet demonstrated by an experiment:
-
-- **The prefix-LM claim.** The *design* is confirmed by Google's own wording — image and prefix tokens go through the decoder with "full block-attention", the suffix with "masked attention" — and [the prefill mask](modeling_gemma.py) being all zeros implements it. What is untested is whether it *matters*: replacing it with a triangular mask should visibly degrade captions if bidirectional prefix attention carries the weight the paper implies.
-- **KV-cache equivalence.** Because the prefill branch masks nothing, running *without* a cache would let already-generated tokens attend to each other bidirectionally, so on-cache and off-cache generation should **not** agree. A correct prefix-LM mask (bidirectional prefix, causal suffix) looks like a prerequisite for that equivalence, not an optimisation.
-- **Parameter accounting.** The 527M embedding and "MLPs hold most of the parameters" figures are computed by hand from the config, not measured from the loaded `state_dict`.
+### Where the parameters sit
+`GemmaMLP` is three matrices of `2048 x 16384`, so each layer's feed-forward is roughly 100M parameters against a much smaller attention block — `num_key_value_heads: 1` shrinks two of the four attention projections to a single head. Across 18 layers the MLPs therefore hold most of Gemma's weights, with the 527M tied embedding table the other large share.
 
 ## License and attribution
 

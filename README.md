@@ -1,4 +1,4 @@
-# PaliGemma from scratch — read, annotated, and probed
+<img width="239" height="205" alt="スクリーンショット 2026-08-06 22 13 30" src="https://github.com/user-attachments/assets/29d2936f-0343-4c94-b14a-0559bab8792f" /># PaliGemma from scratch — read, annotated, and probed
 
 PaliGemma (SigLIP vision encoder + linear projector + Gemma 2B) built from plain PyTorch,
 with the real `google/paligemma-3b-pt-224` weights loaded into it. No `transformers`
@@ -237,6 +237,9 @@ It is a one-line detail with no comment upstream, and getting it backwards would
 - **The mask is the whole story.** Where `SiglipAttention` has no mask argument at all, `GemmaAttention` asserts one is present.
 
 Order matters in the attention body: RoPE is applied **before** the KV cache is updated, so the cache holds already-rotated keys and each key keeps the position it had when it was written. `repeat_kv` comes after, so the cache stores one head rather than eight.
+
+#### Prefix-LM
+<img width="239" height="205" alt="スクリーンショット 2026-08-06 22 13 30" src="https://github.com/user-attachments/assets/cb8dde9a-61f6-4196-8652-55016d39f480" />
 
 PaliGemma is a **prefix-LM**, not a plain causal LM. The image tokens and the prompt form a prefix that attends **bidirectionally** — every image patch can see every other patch and the prompt, and vice versa. Only the generated suffix is causally masked. In this repo the prefill mask is filled with zeros (no masking at all), which implements exactly that, and assumes no padding.
 

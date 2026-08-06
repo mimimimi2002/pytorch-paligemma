@@ -1,7 +1,65 @@
-# pytorch-paligemma
-This is a replication of the pytorch-paligemma(https://github.com/hkproj/pytorch-paligemma)
+# PaliGemma from scratch — read, annotated, and probed
 
-The model code is Umar Jamil's; the notes below are mine. See [License and attribution](#license-and-attribution).
+PaliGemma (SigLIP vision encoder + linear projector + Gemma 2B) built from plain PyTorch,
+with the real `google/paligemma-3b-pt-224` weights loaded into it. No `transformers`
+modelling code is involved — only the tokenizer, the config and the checkpoint come from
+the Hub, and the network itself is the code in this repository.
+
+> This is a fork of [hkproj/pytorch-paligemma](https://github.com/hkproj/pytorch-paligemma)
+> by Umar Jamil. **The model implementation is his.** What is mine is listed below and
+> spelled out in [License and attribution](#license-and-attribution).
+
+## What I added
+
+| | |
+|---|---|
+| **`<loc>` detection decoder** — [detection.py](detection.py) | `detect cat` answers with `<loc0222><loc0113>…`; this parses those tokens back into pixel coordinates and draws the boxes. Not in upstream. |
+| **Hugging Face weight loading** — [`resolve_model_path()`](utils.py#L11) | Upstream required a manually downloaded checkpoint directory. Now `MODEL_PATH` also accepts a repo id and pulls only the files this implementation reads. |
+| **Architecture write-up** — [below](#how-paligemma-works) | Not a summary of the paper: the parts that are only visible in the code, e.g. why the image features are divided by `sqrt(hidden_size)`, and which config defaults silently disagree with the checkpoint. |
+| **Line-by-line annotations** | Comments through `modeling_gemma.py`, `modeling_siglip.py`, `processing_paligemma.py`, `inference.py`. |
+| **Inference runs** — [below](#what-it-actually-outputs) | Four prompts against the real weights, including one result that contradicts what I expected. |
+
+## What it actually outputs
+
+All runs use `google/paligemma-3b-pt-224` on the same photo
+([test_images/pic1.jpeg](test_images/pic1.jpeg)), greedy decoding (`do_sample=False`),
+`max_tokens_to_generate=100`, on Apple Silicon (`mps`). Greedy decoding makes these
+reproducible — the script prints `prompt + decoded`, which is what the table shows.
+
+| prompt | printed output | what it shows |
+|---|---|---|
+| `What kind of animal is in this image? ` | `…image? cat` | Free-form VQA reaches the right answer. |
+| `answer en what color is the cat?` | `…cat? white` | The pretrained `answer {lang} {question}` prefix. |
+| `describe en` | `describe english text in the image "Cat"` | **Not** treated as a task prefix — see below. |
+| `detect cat` | `detect cat <loc0222><loc0113><loc0933><loc0824> cat` | A bounding box, emitted from the same softmax as words. |
+
+### Detection
+
+![detection result](test_images/pic1_detected.jpg)
+
+`<loc0222><loc0113><loc0933><loc0824>` is `y_min, x_min, y_max, x_max` quantised to 1024
+bins. Turning that into pixels is a plain linear rescale, and the reason is worth stating:
+[`process_images`](processing_paligemma.py#L54) squashes every input to a square with
+`resize()`, which does **not** preserve the aspect ratio and adds no letterbox padding. So
+bin 0 is always the top (or left) edge of the *original* image and bin 1023 the bottom (or
+right) edge — no un-padding step is needed. [detection.py](detection.py) does the
+conversion and the drawing.
+
+`segment cat` emits `<seg…>` tokens from the same vocabulary, but they are VQ-VAE codes;
+recovering a mask needs a decoder that is not part of this checkpoint, so this repository
+can print those tokens but cannot turn them into pixels.
+
+### The `describe en` result
+
+I expected `describe en` to trigger captioning. Instead the model continued `en` into
+`english` and produced `describe english text in the image "Cat"` — it read the prompt as
+prose to be continued, not as an instruction.
+
+That is the `pt` / `mix` distinction showing up concretely. `paligemma-3b-pt-224` is a
+**pretrained** checkpoint intended to be fine-tuned; it reliably answers the prefixes that
+were in its pretraining mixture (`caption en`, `answer en …`, `detect …`, `ocr`) and
+otherwise just continues text. The `mix` checkpoints are the instruction-following ones.
+The free-form question in the first row working is the lucky case, not the general one.
 
 ## Usage
 
@@ -21,8 +79,11 @@ afterwards) or a path to a local directory that already contains the checkpoint.
 weights, `config.json` and the tokenizer are pulled from the Hub — the model itself is built
 from the code in this repository.
 
-# Paligemma structure
-<img width="600" height="auto" alt="スクリーンショット 2026-07-27 16 13 08" src="https://github.com/user-attachments/assets/4c173634-3a15-4cc7-8f48-2867841bbd3d" />
+`--output_file` is only meaningful for a `detect` prompt: the generated text is scanned for
+`<loc>` tokens and, if any are found, the boxed image is written there.
+
+# How PaliGemma works
+<img width="600" height="auto" alt="PaliGemma architecture" src="https://github.com/user-attachments/assets/4c173634-3a15-4cc7-8f48-2867841bbd3d" />
 
 PaliGemma is a vision language model which consists of a vision encoder (SigLIP), a projector, and an LLM (Gemma).
 
@@ -97,7 +158,9 @@ PaliGemma extends the Gemma tokenizer so that detection and segmentation can be 
 | 257153 - 257215 | unused padding | 63 |
 | | **vocab_size** | **257216** |
 
-The `<loc>` tokens let the model answer "detect cat" by emitting `<loc0512><loc0256>...cat`, i.e. bounding boxes come out of the same softmax as words. The trailing padding rounds the embedding matrix to a multiple of 64 for hardware efficiency.
+The `<loc>` tokens let the model answer "detect cat" by emitting `<loc0512><loc0256>...cat`, i.e. bounding boxes come out of the same softmax as words — [the detection run above](#detection) is this table in action. The trailing padding rounds the embedding matrix to a multiple of 64 for hardware efficiency.
+
+Because these tokens are registered with `tokenizer.add_tokens()` rather than as *special* tokens, `decode(..., skip_special_tokens=True)` leaves them in the output — which is why `detect` results are readable at all without changing the decoding call.
 
 The embedding table is **tied** between input and output (`embed_tokens` and `lm_head` share weights), so those 257216 x 2048 ≈ 527M parameters are only stored once.
 
@@ -113,6 +176,14 @@ config = PaliGemmaConfig(**model_config_file)   # utils.py
 
 The actual values are `image_token_index=257152`, `vocab_size=257216`, `patch_size=14`. Read `config.json`, not the defaults.
 
+## Open questions I have not settled
+
+Claims above that are read off the code but not yet demonstrated by an experiment:
+
+- **The prefix-LM claim.** [The prefill mask](modeling_gemma.py#L539) is all zeros, so nothing is masked. Replacing it with a triangular mask should visibly degrade captions if bidirectional prefix attention matters as much as the paper implies.
+- **KV-cache equivalence.** Because the prefill branch masks nothing, running *without* a cache would let already-generated tokens attend to each other bidirectionally, so on-cache and off-cache generation should **not** agree. A correct prefix-LM mask (bidirectional prefix, causal suffix) looks like a prerequisite for that equivalence, not an optimisation.
+- **Parameter accounting.** The 527M embedding and "MLPs hold most of the parameters" figures are computed by hand from the config, not measured from the loaded `state_dict`.
+
 ## License and attribution
 
 This repository is a **derivative work**, and the parts have different owners.
@@ -120,7 +191,7 @@ This repository is a **derivative work**, and the parts have different owners.
 | | Origin | Terms |
 |---|---|---|
 | `inference.py`, `modeling_gemma.py`, `modeling_siglip.py`, `processing_paligemma.py`, `utils.py`, `launch_inference.sh`, `notes/` | [hkproj/pytorch-paligemma](https://github.com/hkproj/pytorch-paligemma) by Umar Jamil | **No license published upstream** — all rights reserved by the original authors. Reproduced here for study only. |
-| This README and the explanatory code comments | Mine | MIT — see [LICENSE](LICENSE) |
+| `detection.py`, `resolve_model_path()` in `utils.py`, this README and the explanatory code comments | Mine | MIT — see [LICENSE](LICENSE) |
 | PaliGemma weights | Google | [Gemma Terms of Use](https://ai.google.dev/gemma/terms). Not included here; download separately. |
 
 Because the upstream repository carries no license, the base implementation is

@@ -3,7 +3,7 @@
 # Hugging Face repo id (downloaded and cached on first run),
 # or a path to a local directory holding the checkpoint.
 MODEL_PATH="google/paligemma-3b-pt-224"
-PROMPT="this building is "
+PROMPT="What kind of animal is in this image? "
 IMAGE_FILE_PATH="test_images/pic1.jpeg"
 MAX_TOKENS_TO_GENERATE=100
 TEMPERATURE=0.8

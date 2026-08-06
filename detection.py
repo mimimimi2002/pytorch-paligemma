@@ -10,6 +10,14 @@ order **y_min, x_min, y_max, x_max**. They come out of the same softmax as
 words because the tokenizer reserves ids 256000-257023 for them (see the
 vocabulary table in the README).
 
+`segment cat` answers in the same shape with sixteen codewords appended:
+
+    <loc0205><loc0127><loc0889><loc0824><seg087>…<seg055> cat
+
+so the box is recoverable from a segmentation answer too. The `<seg>` codewords
+are *not* — they index a VQ-VAE codebook whose decoder ships separately from
+this checkpoint, so they are parsed and reported but never drawn.
+
 Mapping the bins back to pixels is a plain linear rescale: `process_images`
 squashes every image to `image_size` x `image_size` with `resize()`, which does
 not preserve the aspect ratio and adds no padding, so bin 0 is always the top
@@ -21,11 +29,17 @@ from typing import List, NamedTuple, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
-# One detection: four <loc> tokens followed by the label, which runs until the
-# next `<loc` or the `;` that separates multiple requested classes.
+# One answer: four <loc> tokens, then the <seg> codewords that only a `segment`
+# prompt produces, then the label — which runs until the next `<` or the `;`
+# that separates multiple requested classes.
 _DETECTION_RE = re.compile(
-    r"<loc(\d{4})><loc(\d{4})><loc(\d{4})><loc(\d{4})>\s*([^<;]*)"
+    r"<loc(\d{4})><loc(\d{4})><loc(\d{4})><loc(\d{4})>"
+    # The model puts a space before the codewords, so do not anchor them tight.
+    r"\s*((?:<seg\d{3}>\s*)*)"
+    r"\s*([^<;]*)"
 )
+
+_SEG_CODE_RE = re.compile(r"<seg(\d{3})>")
 
 # `<loc>` tokens address 1024 bins per axis.
 _NUM_BINS = 1024
@@ -49,13 +63,19 @@ _FONT_CANDIDATES = [
 
 
 class Detection(NamedTuple):
-    """A single box in original-image pixel coordinates, plus its label."""
+    """A single box in original-image pixel coordinates, plus its label.
+
+    `seg_codes` holds the VQ-VAE codewords when the answer came from a `segment`
+    prompt, and is empty for a `detect` one. Nothing here can turn them into a
+    mask; they are carried so the caller can report that they were there.
+    """
 
     x_min: float
     y_min: float
     x_max: float
     y_max: float
     label: str
+    seg_codes: Tuple[int, ...] = ()
 
 
 def parse_detections(text: str, width: int, height: int) -> List[Detection]:
@@ -67,14 +87,16 @@ def parse_detections(text: str, width: int, height: int) -> List[Detection]:
     detections = []
     for match in _DETECTION_RE.finditer(text):
         y_min, x_min, y_max, x_max = (int(v) for v in match.group(1, 2, 3, 4))
-        label = match.group(5).strip()
         detections.append(
             Detection(
                 x_min=x_min / _NUM_BINS * width,
                 y_min=y_min / _NUM_BINS * height,
                 x_max=x_max / _NUM_BINS * width,
                 y_max=y_max / _NUM_BINS * height,
-                label=label,
+                label=match.group(6).strip(),
+                seg_codes=tuple(
+                    int(c) for c in _SEG_CODE_RE.findall(match.group(5))
+                ),
             )
         )
     return detections

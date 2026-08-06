@@ -17,7 +17,7 @@ the Hub, and the network itself is the code in this repository.
 | **Hugging Face weight loading** — [`resolve_model_path()`](utils.py#L11) | Upstream required a manually downloaded checkpoint directory. Now `MODEL_PATH` also accepts a repo id and pulls only the files this implementation reads. |
 | **Architecture write-up** — [below](#how-paligemma-works) | Follows one image and one prompt end to end — pixels into 256 SigLIP patch embeddings, through the projector, merged into the text sequence, then through Gemma's attention to a token — and says what each stage actually does to them. |
 | **Line-by-line annotations** | Comments through `modeling_gemma.py`, `modeling_siglip.py`, `processing_paligemma.py`, `inference.py`. |
-| **Inference runs** — [below](#what-it-actually-outputs) | Four prompts against the real weights, including one result that contradicts what I expected. |
+| **Inference runs** — [below](#what-it-actually-outputs) | All three of the task prefixes Google documents, run against the real weights, with the boxes drawn and the one limit this checkpoint cannot pass. |
 
 ## What it actually outputs
 
@@ -26,12 +26,20 @@ All runs use `google/paligemma-3b-pt-224` on the same photo
 `max_tokens_to_generate=100`, on Apple Silicon (`mps`). Greedy decoding makes these
 reproducible — the script prints `prompt + decoded`, which is what the table shows.
 
-| prompt | printed output | what it shows |
-|---|---|---|
-| `What kind of animal is in this image? ` | `…image? cat` | Free-form VQA reaches the right answer. |
-| `answer en what color is the cat?` | `…cat? white` | The pretrained `answer {lang} {question}` prefix. |
-| `describe en` | `describe english text in the image "Cat"` | **Not** treated as a task prefix — see below. |
-| `detect cat` | `detect cat <loc0222><loc0113><loc0933><loc0824> cat` | A bounding box, emitted from the same softmax as words. |
+These are the three task prefixes Google documents across the
+[model card](https://huggingface.co/google/paligemma-3b-pt-224) and the
+[big_vision README](https://github.com/google-research/big_vision/blob/main/big_vision/configs/proj/paligemma/README.md):
+`caption {lang}`, `detect {things}`, `segment {things}`. There is no fourth — this is the
+whole documented interface of a `pt` checkpoint.
+
+| prompt | printed output |
+|---|---|
+| `caption en` | `caption en white and brown cat on the floor` |
+| `detect cat` | `detect cat <loc0222><loc0113><loc0933><loc0824> cat` |
+| `segment cat` | `segment cat <loc0205><loc0127><loc0889><loc0824> <seg087><seg041>…<seg055> cat` |
+
+Three prompts, three shapes of answer, all decoded by the same `lm_head` over one 257216-row
+vocabulary. Only the first is what people usually mean by "language model output".
 
 ### Detection
 
@@ -46,21 +54,54 @@ bin 0 is always the top (or left) edge of the *original* image and bin 1023 the 
 right) edge — no un-padding step is needed. [detection.py](detection.py) does the
 conversion and the drawing.
 
-`segment cat` emits `<seg…>` tokens from the same vocabulary, but they are VQ-VAE codes;
-recovering a mask needs a decoder that is not part of this checkpoint, so this repository
-can print those tokens but cannot turn them into pixels.
+### Segmentation stops one step short
 
-### The `describe en` result
+`segment cat` answers in the same shape, with sixteen codewords inserted before the label:
 
-I expected `describe en` to trigger captioning. Instead the model continued `en` into
-`english` and produced `describe english text in the image "Cat"` — it read the prompt as
-prose to be continued, not as an instruction.
+```
+<loc0205><loc0127><loc0889><loc0824> <seg087><seg041>…<seg055> cat
+```
 
-That is the `pt` / `mix` distinction showing up concretely. `paligemma-3b-pt-224` is a
-**pretrained** checkpoint intended to be fine-tuned; it reliably answers the prefixes that
-were in its pretraining mixture (`caption en`, `answer en …`, `detect …`, `ocr`) and
-otherwise just continues text. The `mix` checkpoints are the instruction-following ones.
-The free-form question in the first row working is the lucky case, not the general one.
+The box is recoverable — those are ordinary `<loc>` tokens, so [detection.py](detection.py)
+draws them exactly as it draws a `detect` answer. The mask is not. Google describes the
+`<seg>` entries as "codewords used by a lightweight referring-expression segmentation
+**vector-quantized variational auto-encoder**", and that VQ-VAE decoder ships separately from
+this checkpoint. So the asymmetry is real and worth stating plainly: `<loc>` is a **number**
+and needs nothing to interpret it, while `<seg>` is an **index into a codebook this
+repository does not have**. Same vocabulary, same softmax, one of them decodable here.
+
+Comparing the two boxes is a free sanity check, since they were generated independently by
+two different prompts:
+
+| | y_min | x_min | y_max | x_max |
+|---|---|---|---|---|
+| `detect cat` | 222 | 113 | 933 | 824 |
+| `segment cat` | 205 | 127 | 889 | 824 |
+
+They agree to within a few percent of each axis, and on `x_max` exactly — consistent
+localisation, arrived at twice, with no shared computation between the two runs.
+
+### Where a "prefix" actually lives
+
+Two different mechanisms get called "how PaliGemma knows the task", and only one of them
+exists in code:
+
+| | what it is | where you can see it |
+|---|---|---|
+| `<image>`, `<loc0000>`-`<loc1023>`, `<seg000>`-`<seg127>` | **vocabulary** — real ids reserved in the tokenizer and real rows in the embedding matrix | [processing_paligemma.py:88-96](processing_paligemma.py#L88-L96); `tokenize("<loc0222>")` returns one token |
+| `caption` / `detect` / `segment` | **a data convention** — ordinary English words that the pretraining corpus happened to put in front of each example | nowhere. `tokenize("detect cat")` returns ordinary subwords, and nothing in this repo, in `transformers`, or in the tokenizer treats them specially |
+
+Nothing enforces the second row. `detect` works because the weights learned the correlation,
+which is also why fine-tuning a `pt` checkpoint means picking your own prefix — Google's
+three strings are a choice, not a standard.
+
+One consequence of the first row is worth spelling out: `add_tokens()` never touches the
+model. `resize_token_embeddings` is called nowhere in this repository, and the embedding
+matrix is sized purely from `config.json`
+([modeling_gemma.py:368](modeling_gemma.py#L368), `nn.Embedding(257216, 2048)`). The
+tokenizer additions only line the *strings* up with ids the checkpoint already trained, so
+the order in which `<loc>` and `<seg>` are added is load-bearing — swap the two loops and
+every coordinate silently decodes to the wrong number, with no error anywhere.
 
 ## Usage
 
@@ -181,7 +222,7 @@ The actual values are `image_token_index=257152`, `vocab_size=257216`, `patch_si
 
 Claims above that are read off the code but not yet demonstrated by an experiment:
 
-- **The prefix-LM claim.** [The prefill mask](modeling_gemma.py#L539) is all zeros, so nothing is masked. Replacing it with a triangular mask should visibly degrade captions if bidirectional prefix attention matters as much as the paper implies.
+- **The prefix-LM claim.** The *design* is confirmed by Google's own wording — image and prefix tokens go through the decoder with "full block-attention", the suffix with "masked attention" — and [the prefill mask](modeling_gemma.py#L539) being all zeros implements it. What is untested is whether it *matters*: replacing it with a triangular mask should visibly degrade captions if bidirectional prefix attention carries the weight the paper implies.
 - **KV-cache equivalence.** Because the prefill branch masks nothing, running *without* a cache would let already-generated tokens attend to each other bidirectionally, so on-cache and off-cache generation should **not** agree. A correct prefix-LM mask (bidirectional prefix, causal suffix) looks like a prerequisite for that equivalence, not an optimisation.
 - **Parameter accounting.** The 527M embedding and "MLPs hold most of the parameters" figures are computed by hand from the config, not measured from the loaded `state_dict`.
 

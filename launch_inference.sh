@@ -3,13 +3,15 @@
 # Hugging Face repo id (downloaded and cached on first run),
 # or a path to a local directory holding the checkpoint.
 MODEL_PATH="google/paligemma-3b-pt-224"
-PROMPT="What kind of animal is in this image? "
+PROMPT="detect cat"
 IMAGE_FILE_PATH="test_images/pic1.jpeg"
 MAX_TOKENS_TO_GENERATE=100
 TEMPERATURE=0.8
 TOP_P=0.9
 DO_SAMPLE="False"
 ONLY_CPU="False"
+# Only used when the prompt is a `detect` one: where to write the boxed image.
+OUTPUT_FILE="test_images/pic1_detected.jpg"
 
 python inference.py \
     --model_path "$MODEL_PATH" \
@@ -20,4 +22,5 @@ python inference.py \
     --top_p $TOP_P \
     --do_sample $DO_SAMPLE \
     --only_cpu $ONLY_CPU \
+    --output_file "$OUTPUT_FILE" \
 

@@ -5,6 +5,7 @@ import fire
 from processing_paligemma import PaliGemmaProcessor
 from modeling_gemma import KVCache, PaliGemmaForConditionalGeneration
 from utils import load_hf_model
+from detection import save_detections
 
 
 def move_inputs_to_device(model_inputs: dict, device: str):
@@ -34,6 +35,7 @@ def test_inference(
     temperature: float,
     top_p: float,
     do_sample: bool,
+    output_file: str = None,
 ):
     model_inputs = get_model_inputs(processor, prompt, image_file_path, device)
     input_ids = model_inputs["input_ids"]
@@ -81,9 +83,20 @@ def test_inference(
 
     generated_tokens = torch.cat(generated_tokens, dim=-1)
     # Decode the generated tokens
+    # `<loc>`/`<seg>` tokens were added with `add_tokens`, not as special tokens,
+    # so `skip_special_tokens=True` leaves them in place and a `detect` prompt
+    # still shows its raw coordinates here.
     decoded = processor.tokenizer.decode(generated_tokens, skip_special_tokens=True)
 
     print(prompt + decoded)
+
+    # A `detect` prompt answers with <loc> tokens; turn them back into a picture.
+    if output_file is not None:
+        saved = save_detections(image_file_path, decoded, output_file)
+        if saved is None:
+            print("No <loc> tokens in the output, so no boxes were drawn.")
+        else:
+            print(f"Saved detections to {saved}")
 
 # Get all the tokens that sum up to the top p probability and sample from them.
 def _sample_top_p(probs: torch.Tensor, p: float):
@@ -114,6 +127,7 @@ def main(
     top_p: float = 0.9,
     do_sample: bool = False,
     only_cpu: bool = False,
+    output_file: str = None,
 ):
     device = "cpu"
 
@@ -146,6 +160,7 @@ def main(
             temperature,
             top_p,
             do_sample,
+            output_file,
         )
 
 

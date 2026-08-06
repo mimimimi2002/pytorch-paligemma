@@ -21,7 +21,7 @@ the Hub, and the network itself is the code in this repository.
   - [Gemma model](#gemma-model) · [Gemma architecture](#gemma-architecture)
     <br/>[1 input sequence](#step1-build-the-input-sequence) · [2 merge the image](#step2-embed-and-merge-the-image) · [3 scaling](#step3-scale-the-whole-sequence) · [4 decoder block](#step4-decoder-block) · [5 tied head](#step5-final-norm-and-the-tied-head)
   - [SigLIP and Gemma side by side](#siglip-and-gemma-side-by-side)
-  - [Vocabulary](#vocabulary) · [Where the parameters sit](#where-the-parameters-sit)
+  - [Vocabulary](#vocabulary) · [Where the parameters sit](#where-the-parameters-sit) · [Where the numbers come from](#where-the-numbers-come-from)
 - [License and attribution](#license-and-attribution)
 
 ## What I added
@@ -182,8 +182,12 @@ Two details are visible only in the code:
 ### Step5 output norm
 One final `post_layernorm` after all 27 layers, and the output is `[B, 256, 1152]`.
 
+There is no CLS token, no pooling and no projection head, so 256 patches go in and 256 vectors come out — which is what lets PaliGemma hand Gemma a *sequence* to interleave with text rather than one image vector. The checkpoint agrees: `config.json` carries `"vision_use_head": false`. This implementation simply never builds a head, rather than reading that flag.
+
 ## Projection
 SigLIP outputs 1152-dimensional vectors, but Gemma's hidden size is 2048. The projector is a single `nn.Linear(1152, 2048)` that resizes the **embedding dimension** so the image features can sit in the same space as text embeddings. The number of tokens (256) is unchanged.
+
+It really is just the one matrix — no activation, no normalisation, no second layer. Worth noting because `config.json` declares `"projector_hidden_act": "gelu_fast"`, a key this implementation never reads.
 
 ## Gemma model
 Gemma is the language model that consumes the merged sequence and generates text.
@@ -302,6 +306,29 @@ The embedding table is **tied** between input and output (`embed_tokens` and `lm
 
 ### Where the parameters sit
 `GemmaMLP` is three matrices of `2048 x 16384`, so each layer's feed-forward is roughly 100M parameters against a much smaller attention block — `num_key_value_heads: 1` shrinks two of the four attention projections to a single head. Across 18 layers the MLPs therefore hold most of Gemma's weights, with the 527M tied embedding table the other large share.
+
+### Where the numbers come from
+
+Every shape quoted above is from the checkpoint's `config.json`, not from the class signatures. `utils.py` builds the config with `PaliGemmaConfig(**model_config_file)`, so any key present in the file overwrites its default — and several defaults are simply wrong for this checkpoint:
+
+| | class default | config.json |
+|---|---|---|
+| `image_token_index` | 256000 | **257152** |
+| `vocab_size` | 257152 | **257216** |
+| `patch_size` | 16 | **14** |
+| vision `hidden_size` | 768 | **1152** |
+| vision `num_hidden_layers` | 12 | **27** |
+| vision `intermediate_size` | 3072 | **4304** |
+
+Instantiating `SiglipVisionConfig()` with no arguments therefore gives you a *different model* — 12 layers of width 768 over 16-pixel patches — that will happily load nothing and fail in confusing ways.
+
+The more interesting direction is the opposite one. Some values the model depends on are **absent** from `config.json`, so there the class defaults are load-bearing rather than wrong:
+
+- **`image_size`** is not in `vision_config`. The 224 comes from `SiglipVisionConfig.__init__`, and it is what sizes the 256-row position table.
+- **`head_dim`** is not in `text_config`. The 256 comes from `GemmaConfig.__init__`. It happens to equal `hidden_size // num_attention_heads` here, but nothing in the code derives it that way.
+- **`rope_theta`**, **`rms_norm_eps`** and **`max_position_embeddings`** are absent too, so RoPE's base of 10000 is a default, never a stated fact about this checkpoint.
+
+So "read `config.json`, not the defaults" is only half the rule. The file is a *partial* override, and knowing which half you are standing on requires reading both.
 
 ## License and attribution
 

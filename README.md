@@ -1,4 +1,4 @@
-# PaliGemma from scratch — read, annotated, and probed
+# PaliGemma, annotated — reading a VLM implementation line by line
 
 PaliGemma (SigLIP vision encoder + linear projector + Gemma 2B) built from plain PyTorch,
 with the real `google/paligemma-3b-pt-224` weights loaded into it. No `transformers`
